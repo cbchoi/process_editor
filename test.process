@@ -1,0 +1,33 @@
+graph:
+  links: []
+  metadata: {}
+  nodes:
+  - attributes:
+      precision: 2
+    id: c840cb8b-8ee2-4880-9cc1-c40eecc951e9
+    pins:
+      inputs:
+      - A
+      - B
+      outputs:
+      - Sum
+    position:
+      x: 0.0
+      y: 0.0
+    title: Add
+    type: MathAdd
+  - attributes:
+      precision: 2
+      null: 3
+    id: e7652cfb-e46c-4a25-8971-861f7b91a819
+    pins:
+      inputs:
+      - A
+      - B
+      outputs:
+      - Sum
+    position:
+      x: 0.0
+      y: 0.0
+    title: Add
+    type: MathAdd
