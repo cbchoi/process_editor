@@ -1,0 +1,15 @@
+type: "Const1"
+title: "Const 1"
+inputs: []
+outputs:
+  - name: "Value"
+    dtype: "float"
+attributes:
+  - name: "value"
+    type: "float"
+    default: 2.0
+constraints:
+  max_input_links: 0
+  max_output_links: 99
+  allow_self_loop: false
+  allow_cycles: false

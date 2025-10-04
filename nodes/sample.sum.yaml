@@ -1,20 +1,17 @@
-type: "MathAdd"
-title: "Add"
+type: "Sum"
+title: "Sum"
 inputs:
   - name: "A"
     dtype: "float"
   - name: "B"
     dtype: "float"
 outputs:
-  - name: "Sum"
+  - name: "Out"
     dtype: "float"
 attributes:
-  - name: "precision"
-    type: "int"
-    default: 2
-  - name: "precision2"
-    type: "int"
-    default: 2
+  - name: "result"
+    type: "float"
+    default: 0.0
 constraints:
   max_input_links: 2
   max_output_links: 1

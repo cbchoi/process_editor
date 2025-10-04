@@ -1,0 +1,56 @@
+graph:
+  links:
+  - from:
+      node_id: 18e8115d-276d-4aab-ae6a-213f8db65bb7
+      pin: Value
+    id: 6084fd02-a711-4646-8441-88aa8341f5ea
+    to:
+      node_id: 004f49aa-4215-448c-9cf6-acc2341a6908
+      pin: A
+  - from:
+      node_id: cb12839e-53a4-407f-8fcf-ef7f09b1e4db
+      pin: Value
+    id: 5aa1303c-ca97-4ac4-a3bc-6970765f08cf
+    to:
+      node_id: 004f49aa-4215-448c-9cf6-acc2341a6908
+      pin: B
+  metadata: {}
+  nodes:
+  - attributes:
+      value: 2.0
+    id: 18e8115d-276d-4aab-ae6a-213f8db65bb7
+    pins:
+      inputs: []
+      outputs:
+      - Value
+    position:
+      x: 0.0
+      y: 0.0
+    title: Const 1
+    type: Const1
+  - attributes:
+      value: 3.0
+    id: cb12839e-53a4-407f-8fcf-ef7f09b1e4db
+    pins:
+      inputs: []
+      outputs:
+      - Value
+    position:
+      x: 0.0
+      y: 0.0
+    title: Const 2
+    type: Const2
+  - attributes:
+      result: 0.0
+    id: 004f49aa-4215-448c-9cf6-acc2341a6908
+    pins:
+      inputs:
+      - A
+      - B
+      outputs:
+      - Out
+    position:
+      x: 0.0
+      y: 0.0
+    title: Sum
+    type: Sum

@@ -1,33 +1,97 @@
 graph:
-  links: []
+  links:
+  - from:
+      node_id: b89da977-ccec-424e-a13b-1dd0f8542b56
+      pin: Value
+    id: 72fdfff5-ac96-47cd-8d01-0ff9f395349b
+    to:
+      node_id: 792b931c-d1cb-41bd-ab39-01ab9f8c245c
+      pin: A
+  - from:
+      node_id: 574d4f31-1b29-4228-803e-f0966ffd75bf
+      pin: Value
+    id: 819ce786-0b50-487e-a940-3bbfa553cd33
+    to:
+      node_id: 792b931c-d1cb-41bd-ab39-01ab9f8c245c
+      pin: B
+  - from:
+      node_id: 7d3e7bc2-30c7-421d-b4e7-ffac13df5d1e
+      pin: Value
+    id: e7e7f7d1-d5eb-40b5-9124-c4645cbe741d
+    to:
+      node_id: 2b123eae-0c63-4ea7-bfc9-e6a4cd8fe17f
+      pin: B
+  - from:
+      node_id: 792b931c-d1cb-41bd-ab39-01ab9f8c245c
+      pin: Out
+    id: a2bb3e6b-07a8-4123-90cd-16858dc1662f
+    to:
+      node_id: 2b123eae-0c63-4ea7-bfc9-e6a4cd8fe17f
+      pin: A
   metadata: {}
   nodes:
   - attributes:
-      precision: 2
-    id: c840cb8b-8ee2-4880-9cc1-c40eecc951e9
+      value: 2.0
+      null: 1.7999999523162842
+    id: b89da977-ccec-424e-a13b-1dd0f8542b56
     pins:
-      inputs:
-      - A
-      - B
+      inputs: []
       outputs:
-      - Sum
+      - Value
     position:
-      x: 0.0
-      y: 0.0
-    title: Add
-    type: MathAdd
+      x: 93.0
+      y: 96.0
+    title: Const 1
+    type: Const1
   - attributes:
-      precision: 2
-      null: 3
-    id: e7652cfb-e46c-4a25-8971-861f7b91a819
+      value: 3.0
+    id: 574d4f31-1b29-4228-803e-f0966ffd75bf
+    pins:
+      inputs: []
+      outputs:
+      - Value
+    position:
+      x: 95.0
+      y: 230.0
+    title: Const 2
+    type: Const2
+  - attributes:
+      result: 5.0
+    id: 792b931c-d1cb-41bd-ab39-01ab9f8c245c
     pins:
       inputs:
       - A
       - B
       outputs:
-      - Sum
+      - Out
     position:
-      x: 0.0
-      y: 0.0
-    title: Add
-    type: MathAdd
+      x: 519.0
+      y: 166.0
+    title: Sum
+    type: Sum
+  - attributes:
+      value: 2.0
+    id: 7d3e7bc2-30c7-421d-b4e7-ffac13df5d1e
+    pins:
+      inputs: []
+      outputs:
+      - Value
+    position:
+      x: 98.0
+      y: 403.0
+    title: Const 1
+    type: Const1
+  - attributes:
+      result: 7.0
+    id: 2b123eae-0c63-4ea7-bfc9-e6a4cd8fe17f
+    pins:
+      inputs:
+      - A
+      - B
+      outputs:
+      - Out
+    position:
+      x: 894.0
+      y: 276.0
+    title: Sum
+    type: Sum

@@ -7,77 +7,105 @@ import os
 import uuid
 from typing import List, Dict, Any, Optional, Tuple
 
-class NodeTemplate:
-    def __init__(self, data: Dict[str, Any]):
-        self.type = data.get('type')
-        self.title = data.get('title')
-        self.inputs = data.get('inputs', []) or []  # list of {name, dtype?}
-        self.outputs = data.get('outputs', []) or []
-        self.attributes = data.get('attributes', []) or []  # list of {name,type,default,...}
-        self.constraints = data.get('constraints', {}) or {}
+from app.core.node_user_template import NodeUserTemplate
 
-    def pin_exists(self, name: str, kind: str) -> bool:
-        pins = self.inputs if kind == 'input' else self.outputs
-        return any(p.get('name') == name for p in pins)
 
-    def get_attr_default_map(self) -> Dict[str, Any]:
-        defaults = {}
-        for a in self.attributes:
-            if 'default' in a:
-                defaults[a['name']] = a['default']
-        return defaults
+class Node:
+    """Node entity with helpers and stable serialization format."""
+    def __init__(self,
+                 node_id: str,
+                 type_: str,
+                 title: Optional[str] = None,
+                 position: Optional[Dict[str, float]] = None,
+                 attributes: Optional[Dict[str, Any]] = None,
+                 pins: Optional[Dict[str, List[str]]] = None,
+                 ui: Optional[Dict[str, Any]] = None):
+        self.id: str = node_id
+        self.type: str = type_
+        self.title: str = title or type_
+        self.position: Dict[str, float] = position or {'x': 0.0, 'y': 0.0}
+        self.attributes: Dict[str, Any] = attributes or {}
+        self.pins: Dict[str, List[str]] = pins or {'inputs': [], 'outputs': []}
+        self.ui: Dict[str, Any] = ui or {}
+
+    @staticmethod
+    def from_template(template: 'NodeUserTemplate', position: Optional[Tuple[float, float]] = None) -> 'Node':
+        node_id = str(uuid.uuid4())
+        pos = {'x': float(position[0]) if position else 0.0, 'y': float(position[1]) if position else 0.0}
+        pins = {
+            'inputs': [p['name'] for p in (template.inputs or [])],
+            'outputs': [p['name'] for p in (template.outputs or [])],
+        }
+        attrs = template.get_attr_default_map()
+        return Node(node_id, template.type, template.title or template.type, pos, attrs, pins, ui={})
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> 'Node':
+        return Node(
+            node_id=data.get('id'),
+            type_=data.get('type'),
+            title=data.get('title'),
+            position=data.get('position') or {'x': 0.0, 'y': 0.0},
+            attributes=data.get('attributes') or {},
+            pins=data.get('pins') or {'inputs': [], 'outputs': []},
+            ui=data.get('ui') or {},
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        out = {
+            'id': self.id,
+            'type': self.type,
+            'title': self.title,
+            'position': self.position,
+            'attributes': self.attributes,
+            'pins': self.pins,
+        }
+        # persist UI info if present
+        if self.ui:
+            out['ui'] = self.ui
+        return out
 
 
 class GraphModel:
     def __init__(self):
-        self.nodes: List[Dict[str, Any]] = []
+        self.nodes: List[Node] = []
         self.links: List[Dict[str, Any]] = []
         self.metadata: Dict[str, Any] = {}
         # internal indexes (not serialized)
-        self._node_index: Dict[str, Dict[str, Any]] = {}
+        self._node_index: Dict[str, Node] = {}
 
     # --- basic io ---
     def load_from_dict(self, data: Dict[str, Any]):
         graph = data.get('graph', data) or {}
-        self.nodes = graph.get('nodes', []) or []
+        raw_nodes = graph.get('nodes', []) or []
+        self.nodes = [Node.from_dict(n) if not isinstance(n, Node) else n for n in raw_nodes]
         self.links = graph.get('links', []) or []
         self.metadata = graph.get('metadata', {}) or {}
         self._rebuild_index()
 
     def to_dict(self):
         return {
-            'nodes': self.nodes,
+            'nodes': [n.to_dict() for n in self.nodes],
             'links': self.links,
             'metadata': self.metadata
         }
 
     # --- index helpers ---
     def _rebuild_index(self):
-        self._node_index = {n['id']: n for n in self.nodes if 'id' in n}
+        self._node_index = {n.id: n for n in self.nodes if getattr(n, 'id', None)}
 
-    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+    def get_node(self, node_id: str) -> Optional[Node]:
         return self._node_index.get(node_id)
 
     # --- node operations ---
-    def add_node(self, template: NodeTemplate, position: Optional[Tuple[float, float]] = None) -> str:
-        node_id = str(uuid.uuid4())
-        node = {
-            'id': node_id,
-            'type': template.type,
-            'title': template.title or template.type,
-            'position': {'x': float(position[0]) if position else 0.0, 'y': float(position[1]) if position else 0.0},
-            'attributes': template.get_attr_default_map(),
-            'pins': {
-                'inputs': [p['name'] for p in template.inputs],
-                'outputs': [p['name'] for p in template.outputs],
-            },
-        }
+    def add_node(self, template: 'NodeUserTemplate', position: Optional[Tuple[float, float]] = None) -> str:
+        node = Node.from_template(template, position)
         self.nodes.append(node)
-        self._node_index[node_id] = node
-        return node_id
+        self._node_index[node.id] = node
+        return node.id
 
     def remove_node(self, node_id: str):
-        self.nodes = [n for n in self.nodes if n.get('id') != node_id]
+        self.nodes = [n for n in self.nodes if n.id != node_id]
         self.links = [l for l in self.links if l.get('from', {}).get('node_id') != node_id and l.get('to', {}).get('node_id') != node_id]
         self._rebuild_index()
 
@@ -96,35 +124,35 @@ class GraphModel:
         self.links = [l for l in self.links if l.get('id') != link_id]
 
     # --- validation ---
-    def validate(self, templates: Dict[str, NodeTemplate]) -> List[str]:
+    def validate(self, templates: Dict[str, 'NodeUserTemplate']) -> List[str]:
         errors: List[str] = []
         # nodes type and pins
         for n in self.nodes:
-            t = templates.get(n.get('type'))
+            t = templates.get(n.type)
             if not t:
-                errors.append(f"Unknown node type: {n.get('type')} (node {n.get('id')})")
+                errors.append(f"Unknown node type: {n.type} (node {n.id})")
                 continue
             # pin names
             in_pins = set(p.get('name') for p in t.inputs)
             out_pins = set(p.get('name') for p in t.outputs)
-            for p in n.get('pins', {}).get('inputs', []):
+            for p in n.pins.get('inputs', []):
                 if p not in in_pins:
-                    errors.append(f"Invalid input pin '{p}' for node {n.get('id')}")
-            for p in n.get('pins', {}).get('outputs', []):
+                    errors.append(f"Invalid input pin '{p}' for node {n.id}")
+            for p in n.pins.get('outputs', []):
                 if p not in out_pins:
-                    errors.append(f"Invalid output pin '{p}' for node {n.get('id')}")
+                    errors.append(f"Invalid output pin '{p}' for node {n.id}")
             # attributes required/type
             attr_defs = {a['name']: a for a in t.attributes}
-            for name, val in (n.get('attributes') or {}).items():
+            for name, val in (n.attributes or {}).items():
                 adef = attr_defs.get(name)
                 if not adef:
                     continue
                 etype = adef.get('type')
                 if not _validate_type(val, etype, adef):
-                    errors.append(f"Invalid attribute '{name}' value for node {n.get('id')}")
+                    errors.append(f"Invalid attribute '{name}' value for node {n.id}")
             for name, adef in attr_defs.items():
-                if adef.get('required') and name not in (n.get('attributes') or {}):
-                    errors.append(f"Missing required attribute '{name}' for node {n.get('id')}")
+                if adef.get('required') and name not in (n.attributes or {}):
+                    errors.append(f"Missing required attribute '{name}' for node {n.id}")
         # links
         in_count: Dict[Tuple[str, str], int] = {}
         out_count: Dict[Tuple[str, str], int] = {}
@@ -134,33 +162,33 @@ class GraphModel:
             if not fn or not tn:
                 errors.append(f"Link {l.get('id')} references missing node")
                 continue
-            ft = templates.get(fn['type'])
-            tt = templates.get(tn['type'])
+            ft = templates.get(fn.type)
+            tt = templates.get(tn.type)
             fpin = l.get('from', {}).get('pin')
             tpin = l.get('to', {}).get('pin')
             if not ft or not tt:
                 continue
             if not ft.pin_exists(fpin, 'output'):
-                errors.append(f"Invalid from pin '{fpin}' on node {fn['id']}")
+                errors.append(f"Invalid from pin '{fpin}' on node {fn.id}")
             if not tt.pin_exists(tpin, 'input'):
-                errors.append(f"Invalid to pin '{tpin}' on node {tn['id']}")
-            out_count[(fn['id'], fpin)] = out_count.get((fn['id'], fpin), 0) + 1
-            in_count[(tn['id'], tpin)] = in_count.get((tn['id'], tpin), 0) + 1
+                errors.append(f"Invalid to pin '{tpin}' on node {tn.id}")
+            out_count[(fn.id, fpin)] = out_count.get((fn.id, fpin), 0) + 1
+            in_count[(tn.id, tpin)] = in_count.get((tn.id, tpin), 0) + 1
         # check constraints per node
         for n in self.nodes:
-            t = templates.get(n['type'])
+            t = templates.get(n.type)
             if not t:
                 continue
             max_in = t.constraints.get('max_input_links')
             max_out = t.constraints.get('max_output_links')
             if max_in is not None:
-                total_in = sum(cnt for (nid, _), cnt in in_count.items() if nid == n['id'])
+                total_in = sum(cnt for (nid, _), cnt in in_count.items() if nid == n.id)
                 if total_in > max_in:
-                    errors.append(f"Input link count exceeds max for node {n['id']} ({total_in}>{max_in})")
+                    errors.append(f"Input link count exceeds max for node {n.id} ({total_in}>{max_in})")
             if max_out is not None:
-                total_out = sum(cnt for (nid, _), cnt in out_count.items() if nid == n['id'])
+                total_out = sum(cnt for (nid, _), cnt in out_count.items() if nid == n.id)
                 if total_out > max_out:
-                    errors.append(f"Output link count exceeds max for node {n['id']} ({total_out}>{max_out})")
+                    errors.append(f"Output link count exceeds max for node {n.id} ({total_out}>{max_out})")
         # cycles
         if self._has_cycle():
             errors.append('Graph contains a cycle')
@@ -192,7 +220,7 @@ class GraphModel:
             return False
 
         for n in self.nodes:
-            nid = n['id']
+            nid = n.id
             if visit(nid):
                 return True
         return False
@@ -200,8 +228,8 @@ class GraphModel:
 
 # Node template loader
 
-def load_node_templates(nodes_dir: str) -> List[NodeTemplate]:
-    templates: List[NodeTemplate] = []
+def load_node_templates(nodes_dir: str) -> List[NodeUserTemplate]:
+    templates: List[NodeUserTemplate] = []
     if not os.path.exists(nodes_dir):
         return templates
     for fname in os.listdir(nodes_dir):
@@ -209,13 +237,13 @@ def load_node_templates(nodes_dir: str) -> List[NodeTemplate]:
             path = os.path.join(nodes_dir, fname)
             with open(path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
-                templates.append(NodeTemplate(data))
+                templates.append(NodeUserTemplate(data))
     return templates
 
 
 # .process file IO
 
-def load_process_file(path: str) -> GraphModel:
+def load_process_file(path: str) -> 'GraphModel':
     with open(path, 'r', encoding='utf-8') as f:
         data = yaml.safe_load(f) or {}
     model = GraphModel()
@@ -223,14 +251,14 @@ def load_process_file(path: str) -> GraphModel:
     return model
 
 
-def save_process_file(path: str, model: GraphModel):
+def save_process_file(path: str, model: 'GraphModel'):
     with open(path, 'w', encoding='utf-8') as f:
         yaml.safe_dump({'graph': model.to_dict()}, f, allow_unicode=True)
 
 
 # Template validation (basic checks)
 
-def validate_templates(templates: List[NodeTemplate]) -> List[str]:
+def validate_templates(templates: List[NodeUserTemplate]) -> List[str]:
     errors = []
     types = set()
     for t in templates:
@@ -243,7 +271,7 @@ def validate_templates(templates: List[NodeTemplate]) -> List[str]:
     return errors
 
 
-def templates_by_type(templates: List[NodeTemplate]) -> Dict[str, NodeTemplate]:
+def templates_by_type(templates: List[NodeUserTemplate]) -> Dict[str, NodeUserTemplate]:
     return {t.type: t for t in templates if getattr(t, 'type', None)}
 
 
