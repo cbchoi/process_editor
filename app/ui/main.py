@@ -49,6 +49,11 @@ def start_gui(model: GraphModel, templates_map):
     current_path = {"value": None}
     pending_delete_path = {"value": None}
 
+    # Resize state for node width dragging
+    resize_state = {"node_id": None, "start_x": 0.0, "start_w": 180.0}
+    MIN_NODE_WIDTH = 120
+    SIZER_WIDTH = 10
+
     def processes_dir() -> str:
         path = os.path.join(PROJECT_ROOT, 'processes')
         return path if os.path.isdir(path) else PROJECT_ROOT
@@ -113,10 +118,65 @@ def start_gui(model: GraphModel, templates_map):
                 pass
         return None
 
+    # --- node width resize helpers ---
+    def _get_node_width(node_id: str) -> int:
+        node = model.get_node(node_id) or {}
+        ui = node.get('ui') or {}
+        w = ui.get('width') if isinstance(ui, dict) else None
+        try:
+            return int(w) if w is not None else 220
+        except Exception:
+            return 220
+
+    def _set_node_width(node_id: str, width: int):
+        width = max(MIN_NODE_WIDTH, int(width))
+        spacer_tag = f"width_spacer::{node_id}"
+        if dpg.does_item_exist(spacer_tag):
+            dpg.configure_item(spacer_tag, width=width - SIZER_WIDTH)
+        node = model.get_node(node_id)
+        if node is not None:
+            node.setdefault('ui', {})['width'] = width
+        logger.debug('Node width set: id=%s width=%s', node_id, width)
+
+    def on_sizer_pressed(sender, app_data, user_data):
+        nid = user_data
+        resize_state['node_id'] = nid
+        try:
+            x, _ = dpg.get_mouse_pos(local=False)
+        except Exception:
+            x = 0.0
+        resize_state['start_x'] = float(x)
+        # read current spacer width
+        cur_w = _get_node_width(nid)
+        resize_state['start_w'] = float(cur_w)
+        logger.debug('Resize start: node=%s start_x=%.1f start_w=%.1f', nid, resize_state['start_x'], resize_state['start_w'])
+
+    def on_global_drag(sender, app_data):
+        nid = resize_state.get('node_id')
+        if not nid:
+            return
+        try:
+            x, _ = dpg.get_mouse_pos(local=False)
+        except Exception:
+            return
+        dx = float(x) - float(resize_state.get('start_x', 0.0))
+        new_w = int(resize_state.get('start_w', 200.0) + dx)
+        _set_node_width(nid, new_w)
+
+    def on_global_release(sender, app_data):
+        if resize_state.get('node_id'):
+            logger.debug('Resize end: node=%s', resize_state['node_id'])
+        resize_state['node_id'] = None
+
     def ui_create_node(node_id: str, template: NodeTemplate, node_data: dict):
         logger.debug('UI create node: id=%s type=%s', node_id, template.type)
         node_tag = f"node::{node_id}"
         with dpg.node(label=node_data.get('title') or template.title or template.type, parent=node_editor_tag, tag=node_tag):
+            # Width control row (static attribute): spacer + sizer handle
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                with dpg.group(horizontal=True):
+                    dpg.add_spacer(tag=f"width_spacer::{node_id}", width=max(MIN_NODE_WIDTH, _get_node_width(node_id) - SIZER_WIDTH))
+                    dpg.add_button(tag=f"sizer::{node_id}", label="?", width=SIZER_WIDTH, height=18, callback=on_sizer_pressed, user_data=node_id)
             # Inputs
             for pin in (template.inputs or []):
                 attr_tag = f"attr::{node_id}::{pin.get('name')}::input"
@@ -432,7 +492,17 @@ def start_gui(model: GraphModel, templates_map):
                 dpg.configure_item('ConfirmDelete', show=False)
 
     try:
+        logger.debug('Creating DPG context...')
         dpg.create_context()
+        logger.debug('DPG context created.')
+
+        # Optional: log on exit
+        try:
+            dpg.set_exit_callback(lambda: logger.info('DearPyGui exit callback invoked'))
+        except Exception:
+            pass
+
+        logger.debug('Building primary window and UI...')
         with dpg.window(tag="Primary Window", label="Process Editor", width=1200, height=800):
             with dpg.menu_bar():
                 with dpg.menu(label="File"):
@@ -457,6 +527,7 @@ def start_gui(model: GraphModel, templates_map):
             dpg.add_separator()
             dpg.add_text("Ready", tag='StatusText')
 
+        logger.debug('Creating file dialogs...')
         # File dialogs (hidden) - add All Files first so it becomes default filter
         with dpg.file_dialog(directory_selector=False, show=False, callback=on_open_dialog, tag='OpenDialog', width=700 ,height=400, modal=True):
             dpg.add_file_extension(".*")
@@ -468,22 +539,38 @@ def start_gui(model: GraphModel, templates_map):
             dpg.add_file_extension(".*")
             dpg.add_file_extension(".process", color=(255, 0, 0, 255))
 
-        # Build node menu items
+        logger.debug('Refreshing templates menu...')
         refresh_templates_menu()
+        logger.debug('Templates menu ready.')
 
+        logger.debug('Creating viewport...')
         dpg.create_viewport(title='Process Editor', width=1300, height=900)
+        logger.debug('Viewport created.')
+
+        logger.debug('Setting up DearPyGui...')
         dpg.setup_dearpygui()
+        logger.debug('DearPyGui setup complete.')
+
+        logger.debug('Showing viewport...')
         dpg.show_viewport()
+        logger.debug('Viewport shown.')
+
+        logger.debug('Setting primary window...')
         dpg.set_primary_window("Primary Window", True)
+        logger.debug('Primary window set. Entering main loop...')
+
         dpg.start_dearpygui()
+        logger.debug('Main loop exited normally.')
     except Exception:
         logger.exception('Error while running DearPyGui event loop')
         print('Error while running DearPyGui event loop:', file=sys.stderr)
         traceback.print_exc()
         raise
     finally:
+        logger.debug('Destroying DPG context...')
         try:
             dpg.destroy_context()
+            logger.debug('DPG context destroyed.')
         except Exception:
             logger.exception('Error destroying DearPyGui context')
             pass
