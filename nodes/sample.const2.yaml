@@ -13,3 +13,5 @@ constraints:
   max_output_links: 99
   allow_self_loop: false
   allow_cycles: false
+compute: |
+  OUT['Value'] = float(ATTR.get('value', 0.0))

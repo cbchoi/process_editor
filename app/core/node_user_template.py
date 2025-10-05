@@ -3,7 +3,7 @@
 NodeUserTemplate: user-defined node template description loaded from YAML.
 Separated from data_model to decouple UI/runtime node objects from template schema.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class NodeUserTemplate:
@@ -14,6 +14,8 @@ class NodeUserTemplate:
         self.outputs: List[Dict[str, Any]] = data.get('outputs', []) or []
         self.attributes: List[Dict[str, Any]] = data.get('attributes', []) or []
         self.constraints: Dict[str, Any] = data.get('constraints', {}) or {}
+        # optional compute script (Python expression/commands) using IN, ATTR, OUT
+        self.compute: Optional[str] = data.get('compute')
 
     def pin_exists(self, name: str, kind: str) -> bool:
         pins = self.inputs if kind == 'input' else self.outputs

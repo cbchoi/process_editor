@@ -17,3 +17,9 @@ constraints:
   max_output_links: 1
   allow_self_loop: false
   allow_cycles: false
+compute: |
+  a = float(IN.get('A', 0.0)) if IN.get('A') is not None else 0.0
+  b = float(IN.get('B', 0.0)) if IN.get('B') is not None else 0.0
+  s = a + b
+  ATTR['result'] = s
+  OUT['Out'] = s

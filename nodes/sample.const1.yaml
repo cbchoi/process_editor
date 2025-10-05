@@ -13,3 +13,6 @@ constraints:
   max_output_links: 99
   allow_self_loop: false
   allow_cycles: false
+compute: |
+  # Emit attribute value
+  OUT['Value'] = float(ATTR.get('value', 0.0))

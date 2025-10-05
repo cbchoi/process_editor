@@ -16,7 +16,7 @@ if PROJECT_ROOT not in sys.path:
 from app.core.data_model import GraphModel, load_process_file, save_process_file, load_node_templates, templates_by_type
 from app.core.node_user_template import NodeUserTemplate
 from app.ui.gui_node import GUINode
-from app.plugins.plugin_loader import run_plugin
+from app.plugins.plugin_loader import run_plugin, load_executor
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,37 @@ class ProcessEditor:
                 except Exception:
                     continue
 
+    # ---------- attribute sync ----------
+    def _sync_attributes_from_ui(self):
+        dpg = self.dpg
+        for node in list(self.model.nodes):
+            t = self.templates_map.get(node.type)
+            if not t:
+                continue
+            for a in (t.attributes or []):
+                name = a.get('name')
+                atype = a.get('type')
+                tag = f"attrval::{node.id}::{name}"
+                if not dpg.does_item_exist(tag):
+                    continue
+                try:
+                    v = dpg.get_value(tag)
+                except Exception:
+                    continue
+                # coerce type
+                try:
+                    if atype == 'int':
+                        v = int(v)
+                    elif atype == 'float':
+                        v = float(v)
+                    elif atype == 'bool':
+                        v = bool(v)
+                    elif atype == 'enum' or atype == 'str':
+                        v = str(v)
+                except Exception:
+                    pass
+                node.attributes[name] = v
+
     # ---------- apply graph updates to model/UI ----------
     def _apply_graph_update(self, graph_dict: dict):
         dpg = self.dpg
@@ -198,8 +229,10 @@ class ProcessEditor:
             node_obj = self.model.get_node(nid)
             if not node_obj:
                 continue
-            # update model attrs
-            node_obj.attributes = dict(attrs)
+            # merge model attrs
+            if getattr(node_obj, 'attributes', None) is None:
+                node_obj.attributes = {}
+            node_obj.attributes.update(dict(attrs))
             # update UI widgets if present
             for name, val in attrs.items():
                 wtag = f"attrval::{nid}::{name}"
@@ -249,11 +282,31 @@ class ProcessEditor:
         self._mark_dirty()
 
     def _on_execute(self):
+        # ensure latest edits are captured even if a widget still has focus
+        self._sync_attributes_from_ui()
         errors = self.model.validate(self.templates_map)
         if errors:
             self._show_message('Validation Errors', "\n".join(errors))
             return
-        result = run_plugin('app.plugins.executor_sum.SumExecutor', self.model.to_dict())
+        # build plain templates dict for executor
+        tdict = {}
+        for ttype, t in (self.templates_map or {}).items():
+            tdict[ttype] = {
+                'type': t.type,
+                'title': t.title,
+                'inputs': t.inputs,
+                'outputs': t.outputs,
+                'attributes': t.attributes,
+                'constraints': t.constraints,
+                'compute': getattr(t, 'compute', None),
+            }
+        executor = load_executor('app.plugins.executor_generic.GenericExecutor')
+        try:
+            result = executor.execute(self.model.to_dict(), tdict)
+        except Exception as e:
+            logger.exception('Executor error: %s', e)
+            self._show_message('Execute Error', str(e))
+            return
         if isinstance(result, dict) and result.get('status') == 'ok' and isinstance(result.get('final_graph'), dict):
             self._apply_graph_update(result.get('final_graph'))
         if self.dpg.does_item_exist('OutputText'):
