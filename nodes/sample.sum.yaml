@@ -13,7 +13,7 @@ attributes:
     type: "float"
     default: 0.0
 constraints:
-  max_input_links: 2
+  max_input_links: 3
   max_output_links: 1
   allow_self_loop: false
   allow_cycles: false

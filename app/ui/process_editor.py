@@ -7,6 +7,7 @@ import os
 import sys
 import logging
 import traceback
+from collections import defaultdict
 
 # Ensure project root is on sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -356,8 +357,101 @@ class ProcessEditor:
         self._mark_dirty()
         self._set_status(f'Deleted node {node_id}')
 
+    # ---------- logging helpers ----------
+    def _log_links(self, where: str):
+        try:
+            lines = [f"[{where}] Links ({len(self.model.links)}):"]
+            in_count = defaultdict(int)
+            out_count = defaultdict(int)
+            for l in self.model.links:
+                fid = l.get('from', {}).get('node_id')
+                fpin = l.get('from', {}).get('pin')
+                tid = l.get('to', {}).get('node_id')
+                tpin = l.get('to', {}).get('pin')
+                lines.append(f"  - {l.get('id')} : {fid}.{fpin} -> {tid}.{tpin}")
+                out_count[(fid, fpin)] += 1
+                in_count[(tid, tpin)] += 1
+            # totals per node
+            totals = defaultdict(lambda: {'in': 0, 'out': 0})
+            for (nid, _), c in in_count.items():
+                totals[nid]['in'] += c
+            for (nid, _), c in out_count.items():
+                totals[nid]['out'] += c
+            lines.append('[Totals per node]')
+            for nid, cnt in totals.items():
+                lines.append(f"  - node {nid}: in={cnt['in']} out={cnt['out']}")
+            logger.info("\n".join(lines))
+        except Exception:
+            logger.exception('Failed to log links')
+
+    # ---------- reconcile helpers ----------
+    def _reconcile_model_links(self, where: str):
+        dpg = self.dpg
+        removed = []
+        for l in list(self.model.links):
+            mid = l.get('id')
+            alias = f"link::{mid}"
+            alias_exists = dpg.does_item_exist(alias)
+            valid_mapping = False
+            # sweep mappings pointing to this mid; keep only those whose DPG item still exists
+            for k, v in list(self.dpg_link_to_model_link.items()):
+                if v != mid:
+                    continue
+                if isinstance(k, int):
+                    if dpg.does_item_exist(k):
+                        valid_mapping = True
+                    else:
+                        self.dpg_link_to_model_link.pop(k, None)
+                elif isinstance(k, str):
+                    if dpg.does_item_exist(k):
+                        valid_mapping = True
+                    else:
+                        # stale alias mapping; drop
+                        self.dpg_link_to_model_link.pop(k, None)
+            if not alias_exists and not valid_mapping:
+                # no UI presence; purge model link
+                logger.info('RECONCILE(%s) removing stale model link id=%s', where, mid)
+                try:
+                    self.model.remove_link(mid)
+                except Exception:
+                    pass
+                removed.append(mid)
+        if removed:
+            self._mark_dirty()
+            self._log_links(f'after-reconcile-{where}')
+
+
+    # ---------- link ops ----------
+    def _remove_model_link_by_endpoints(self, out_node_id: str, out_pin: str, in_node_id: str, in_pin: str):
+        logger.info("DEL by endpoints: %s.%s -> %s.%s", out_node_id, out_pin, in_node_id, in_pin)
+        link = next((L for L in list(self.model.links) if L.get('from', {}).get('node_id') == out_node_id and
+                     L.get('from', {}).get('pin') == out_pin and
+                     L.get('to', {}).get('node_id') == in_node_id and
+                     L.get('to', {}).get('pin') == in_pin), None)
+        if not link:
+            logger.info('DEL by endpoints: no matching link found')
+            return None
+        mid = link.get('id')
+        self.model.remove_link(mid)
+        logger.info('DEL removed model link id=%s', mid)
+        # clean mappings for this link
+        try:
+            self.dpg_link_to_model_link.pop(f"link::{mid}", None)
+        except Exception:
+            pass
+        for k in list(self.dpg_link_to_model_link.keys()):
+            try:
+                if self.dpg_link_to_model_link.get(k) == mid:
+                    self.dpg_link_to_model_link.pop(k, None)
+            except Exception:
+                continue
+        return mid
+
     def _on_link_created(self, sender, app_data):
         dpg = self.dpg
+        logger.info('LINK CREATE raw app_data=%s', app_data)
+        # purge any stale model links before we add a new one
+        self._reconcile_model_links('before-create')
         dpg_link_id = None
         if isinstance(app_data, (list, tuple)) and len(app_data) >= 3:
             dpg_link_id, a1, a2 = app_data[0], app_data[1], app_data[2]
@@ -367,6 +461,7 @@ class ProcessEditor:
             return
         pin1 = self.dpg_attr_to_pin.get(a1)
         pin2 = self.dpg_attr_to_pin.get(a2)
+        logger.info('LINK pins resolved: a1=%s -> %s, a2=%s -> %s', a1, pin1, a2, pin2)
         if not pin1 or not pin2:
             if dpg_link_id is not None and dpg.does_item_exist(dpg_link_id):
                 try:
@@ -388,59 +483,166 @@ class ProcessEditor:
                 except Exception:
                     pass
             return
-        model_link_id = self.model.add_link(pin_out[0], pin_out[1], pin_in[0], pin_in[1])
+        src_nid, src_pin = pin_out[0], pin_out[1]
+        dst_nid, dst_pin = pin_in[0], pin_in[1]
+        logger.info('LINK endpoints: %s.%s -> %s.%s', src_nid, src_pin, dst_nid, dst_pin)
+        # ignore identical duplicate link (same endpoints) unless it's stale (no DPG item exists)
+        exists = next((L for L in self.model.links if L.get('from', {}).get('node_id') == src_nid and
+                       L.get('from', {}).get('pin') == src_pin and
+                       L.get('to', {}).get('node_id') == dst_nid and
+                       L.get('to', {}).get('pin') == dst_pin), None)
+        if exists:
+            mid = exists.get('id')
+            alias = f"link::{mid}"
+            alias_exists = dpg.does_item_exist(alias)
+            has_live_mapping = False
+            for k, v in list(self.dpg_link_to_model_link.items()):
+                if v != mid:
+                    continue
+                if isinstance(k, int) and dpg.does_item_exist(k):
+                    has_live_mapping = True
+                    break
+                if isinstance(k, str) and dpg.does_item_exist(k):
+                    has_live_mapping = True
+                    break
+            if not alias_exists and not has_live_mapping:
+                # stale model link: purge and continue to create
+                logger.info('LINK existed but stale (mid=%s); purging and recreating', mid)
+                try:
+                    self.model.remove_link(mid)
+                except Exception:
+                    pass
+                # remove leftover mappings
+                try:
+                    self.dpg_link_to_model_link.pop(alias, None)
+                except Exception:
+                    pass
+                for k in list(self.dpg_link_to_model_link.keys()):
+                    try:
+                        if self.dpg_link_to_model_link.get(k) == mid:
+                            self.dpg_link_to_model_link.pop(k, None)
+                    except Exception:
+                        continue
+            else:
+                logger.info('LINK already exists for %s.%s -> %s.%s; ignoring.', src_nid, src_pin, dst_nid, dst_pin)
+                if dpg_link_id is not None and dpg.does_item_exist(dpg_link_id):
+                    try:
+                        dpg.delete_item(dpg_link_id)
+                    except Exception:
+                        pass
+                self._set_status('Link exists; ignored')
+                return
+        # add new link
+        model_link_id = self.model.add_link(src_nid, src_pin, dst_nid, dst_pin)
         errors = self.model.validate(self.templates_map)
         if errors:
+            logger.warning('VALIDATION FAILED after create: %s', ' | '.join(errors))
+            self._log_links('after-create')
             self.model.remove_link(model_link_id)
-            self._show_message('Validation Error', "\n".join(errors))
             if dpg_link_id is not None and dpg.does_item_exist(dpg_link_id):
                 try:
                     dpg.delete_item(dpg_link_id)
                 except Exception:
                     pass
             return
+        link_tag = f"link::{model_link_id}"
         if dpg_link_id is None:
             out_id = self._get_attr_id(attr_out_raw)
             in_id = self._get_attr_id(attr_in_raw)
             if out_id is None or in_id is None:
                 self.model.remove_link(model_link_id)
                 return
-            dpg_link_id = dpg.add_node_link(out_id, in_id, parent=self.node_editor_tag)
+            dpg_link_id = dpg.add_node_link(out_id, in_id, parent=self.node_editor_tag, tag=link_tag)
             try:
                 if dpg_link_id is None:
                     dpg_link_id = dpg.last_item()
             except Exception:
                 pass
-        self.dpg_link_to_model_link[dpg_link_id] = model_link_id
-        # link context menu
-        try:
-            with dpg.popup(dpg_link_id, mousebutton=dpg.mvMouseButton_Right):
-                dpg.add_menu_item(label="Delete Link", callback=lambda s, a, u=dpg_link_id: self._delete_link_by_id(u))
-        except Exception:
-            pass
-        self._mark_dirty()
-        self._set_status('Link created')
-
-    def _delete_link_by_id(self, dpg_link_id):
-        if self.dpg.does_item_exist(dpg_link_id):
-            # Deleting the item triggers delink_callback which updates model
-            self.dpg.delete_item(dpg_link_id)
-
-    def _on_link_deleted(self, sender, app_data):
-        dpg_link_id = app_data
-        mid = self.dpg_link_to_model_link.pop(dpg_link_id, None)
-        if mid is None:
+        else:
             try:
-                alias = None
-                if isinstance(dpg_link_id, int):
-                    alias = self.dpg.get_item_alias(dpg_link_id)
-                if alias:
-                    mid = self.dpg_link_to_model_link.pop(alias, None)
+                dpg.set_item_alias(dpg_link_id, link_tag)
             except Exception:
                 pass
+        self.dpg_link_to_model_link[dpg_link_id] = model_link_id
+        self.dpg_link_to_model_link[link_tag] = model_link_id
+        self._mark_dirty()
+        self._set_status('Link created')
+        self._log_links('after-create-ok')
+
+    def _on_link_deleted(self, sender, app_data):
+        logger.info('LINK DELETE raw app_data=%s', app_data)
+        mid = None
+        if isinstance(app_data, (list, tuple)):
+            if len(app_data) == 3:
+                dpg_link_id, a1, a2 = app_data
+                mid = self.dpg_link_to_model_link.pop(dpg_link_id, None)
+                try:
+                    alias = self.dpg.get_item_alias(dpg_link_id) if isinstance(dpg_link_id, int) else None
+                    if alias:
+                        self.dpg_link_to_model_link.pop(alias, None)
+                except Exception:
+                    pass
+                p1 = self.dpg_attr_to_pin.get(a1)
+                p2 = self.dpg_attr_to_pin.get(a2)
+                logger.info('LINK DELETE pins: a1=%s -> %s, a2=%s -> %s', a1, p1, a2, p2)
+                if p1 and p2:
+                    if p1[2] == 'output' and p2[2] == 'input':
+                        mid = self._remove_model_link_by_endpoints(p1[0], p1[1], p2[0], p2[1]) or mid
+                    elif p2[2] == 'output' and p1[2] == 'input':
+                        mid = self._remove_model_link_by_endpoints(p2[0], p2[1], p1[0], p1[1]) or mid
+            elif len(app_data) == 2:
+                a1, a2 = app_data
+                p1 = self.dpg_attr_to_pin.get(a1)
+                p2 = self.dpg_attr_to_pin.get(a2)
+                logger.info('LINK DELETE pins: a1=%s -> %s, a2=%s -> %s', a1, p1, a2, p2)
+                if p1 and p2:
+                    if p1[2] == 'output' and p2[2] == 'input':
+                        mid = self._remove_model_link_by_endpoints(p1[0], p1[1], p2[0], p2[1])
+                    elif p2[2] == 'output' and p1[2] == 'input':
+                        mid = self._remove_model_link_by_endpoints(p2[0], p2[1], p1[0], p1[1])
+        else:
+            dpg_link_id = app_data
+            mid = self.dpg_link_to_model_link.pop(dpg_link_id, None)
+            if mid is None:
+                try:
+                    if isinstance(dpg_link_id, int):
+                        alias = self.dpg.get_item_alias(dpg_link_id)
+                        if alias:
+                            mid = self.dpg_link_to_model_link.pop(alias, None)
+                    elif isinstance(dpg_link_id, str):
+                        rid = None
+                        try:
+                            rid = self.dpg.get_alias_id(dpg_link_id)
+                        except Exception:
+                            rid = None
+                        if rid is not None:
+                            mid = self.dpg_link_to_model_link.pop(rid, None)
+                except Exception:
+                    pass
+            if mid is not None:
+                try:
+                    self.model.remove_link(mid)
+                    logger.info('DEL removed model link id=%s (by id/alias)', mid)
+                except Exception:
+                    pass
+                try:
+                    self.dpg_link_to_model_link.pop(f"link::{mid}", None)
+                except Exception:
+                    pass
+                for k in list(self.dpg_link_to_model_link.keys()):
+                    try:
+                        if self.dpg_link_to_model_link.get(k) == mid:
+                            self.dpg_link_to_model_link.pop(k, None)
+                    except Exception:
+                        continue
         if mid:
-            self.model.remove_link(mid)
             self._mark_dirty()
+            self._log_links('after-delete')
+        # final reconciliation to purge any residual stale links
+        try:
+            self._reconcile_model_links('after-delete')
+        except Exception:
+            logger.exception('Failed to reconcile after delete')
         self._set_status('Link deleted')
 
     # ---------- file handlers ----------
@@ -684,6 +886,19 @@ class ProcessEditor:
             logger.exception('Failed to load/bind custom font')
             return None
 
+    def _on_editor_rclick(self, sender, app_data):
+        dpg = self.dpg
+        try:
+            x, y = dpg.get_mouse_pos(local=False)
+        except Exception:
+            x = y = 0
+        if dpg.does_item_exist('EditorContextMenu'):
+            try:
+                dpg.configure_item('EditorContextMenu', pos=(int(x), int(y)))
+            except Exception:
+                pass
+            dpg.configure_item('EditorContextMenu', show=True)
+
     # ---------- run ----------
     def run(self):
         try:
@@ -721,6 +936,13 @@ class ProcessEditor:
                                     delink_callback=self._on_link_deleted,
                                     minimap=True,
                                     minimap_location=dpg.mvNodeMiniMap_Location_BottomRight)
+                # attach right-click handler to node editor
+                with dpg.item_handler_registry(tag='NodeEditorHandlers'):
+                    dpg.add_item_clicked_handler(button=dpg.mvMouseButton_Right, callback=self._on_editor_rclick)
+                try:
+                    dpg.bind_item_handler_registry(self.node_editor_tag, 'NodeEditorHandlers')
+                except Exception:
+                    pass
                 dpg.add_spacer(height=8)
                 dpg.add_button(label="Execute", callback=lambda: self._on_execute())
                 dpg.add_spacer(height=8)
@@ -729,7 +951,11 @@ class ProcessEditor:
                 dpg.add_spacer(height=6)
                 dpg.add_text("Output:")
                 dpg.add_input_text(tag='OutputText', default_value='', multiline=True, readonly=True, height=120, width=-1)
-            # file dialogs: restrict to .process only to avoid invalid selections like test.*
+            # context menu window (outside of Primary Window to avoid container stack issues)
+            if not dpg.does_item_exist('EditorContextMenu'):
+                with dpg.window(tag='EditorContextMenu', label='', show=False, no_title_bar=True, no_move=True, no_resize=True, autosize=True):
+                    dpg.add_menu_item(label='Delete Selected', callback=lambda: (self._delete_selected(), dpg.configure_item('EditorContextMenu', show=False)))
+            # file dialogs
             with dpg.file_dialog(directory_selector=False, show=False, callback=self._on_open_dialog, tag='OpenDialog', width=700, height=400, modal=True):
                 dpg.add_file_extension(".process", color=(0, 255, 0, 255))
             with dpg.file_dialog(directory_selector=False, show=False, callback=self._on_save_dialog, tag='SaveDialog', width=700, height=400, modal=True):
