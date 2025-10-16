@@ -1,5 +1,5 @@
-type: "Const2"
-title: "Const 2"
+type: "DoubleNode"
+title: "Double Number"
 inputs: []
 outputs:
   - name: "Value"
