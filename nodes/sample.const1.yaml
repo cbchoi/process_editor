@@ -1,5 +1,5 @@
-type: "Const1"
-title: "Const 1"
+type: "ConstNode"
+title: "Const Node"
 inputs: []
 outputs:
   - name: "Value"
